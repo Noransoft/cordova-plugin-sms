@@ -21,6 +21,8 @@ import android.util.Log;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -332,6 +334,55 @@ extends CordovaPlugin {
         this.fireEvent("onSMSArrive", json);
     }
 
+    private static Map<String, String> RetrieveMessages(Intent intent) {
+        Map<String, String> msg = null; 
+        SmsMessage[] msgs = null;
+        Bundle bundle = intent.getExtras();
+        
+        if (bundle != null && bundle.containsKey("pdus")) {
+            Object[] pdus = (Object[]) bundle.get("pdus");
+
+            if (pdus != null) {
+                int nbrOfpdus = pdus.length;
+                msg = new HashMap<String, String>(nbrOfpdus);
+                msgs = new SmsMessage[nbrOfpdus];
+                
+                // There can be multiple SMS from multiple senders, there can be a maximum of nbrOfpdus different senders
+                // However, send long SMS of same sender in one message
+                for (int i = 0; i < nbrOfpdus; i++) {
+                    msgs[i] = SmsMessage.createFromPdu((byte[])pdus[i]);
+                    
+                    String originatinAddress = msgs[i].getOriginatingAddress();
+                    
+                    // Check if index with number exists                    
+                    if (!msg.containsKey(BODY)) { 
+                        // Index with number doesn't exist
+                        // Save string into associative array with sender number as index
+                        msg.put(ADDRESS, msgs[i].getOriginatingAddress());
+                        msg.put(BODY, msgs[i].getMessageBody());
+                        msg.put(STATUS, String.valueOf(msgs[i].getStatus()));
+                        msg.put(SERVICE_CENTER, msgs[i].getServiceCenterAddress());
+                        msg.put(DATE_SENT , String.valueOf(msgs[i].getTimestampMillis()));
+                        
+                    } else {
+                        // Number has been there, add content but consider that
+                        // msg.get(originatinAddress) already contains sms:sndrNbr:previousparts of SMS, 
+                        // so just add the part of the current PDU
+                        String previousparts = msg.get(BODY);
+                        String msgString = previousparts + msgs[i].getMessageBody();
+                        msg.put(ADDRESS, originatinAddress);
+                        msg.put(BODY, msgString);
+                        msg.put(STATUS, String.valueOf(msgs[i].getStatus()));
+                        msg.put(SERVICE_CENTER, msgs[i].getServiceCenterAddress());
+                        msg.put(DATE_SENT , String.valueOf(msgs[i].getTimestampMillis()));
+                    }
+                }
+            }
+        }
+
+        return msg;
+    }
+
     protected void createIncomingSMSReceiver() {
         Activity ctx = this.cordova.getActivity();
         this.mReceiver = new BroadcastReceiver(){
@@ -347,11 +398,10 @@ extends CordovaPlugin {
                     if ((bundle = intent.getExtras()) != null) {
                         Object[] pdus;
                         if ((pdus = (Object[])bundle.get("pdus")).length != 0) {
-                            for (int i = 0; i < pdus.length; ++i) {
-                                SmsMessage sms = SmsMessage.createFromPdu((byte[])((byte[])pdus[i]));
-                                JSONObject json = SMSPlugin.this.getJsonFromSmsMessage(sms);
-                                SMSPlugin.this.onSMSArrive(json);
-                            }
+                            //SmsMessage sms = SmsMessage.createFromPdu((byte[])((byte[])pdus[i]));
+                            Map<String, String> msg = RetrieveMessages(intent);
+                            JSONObject json = SMSPlugin.this.getJsonFromMap(msg);
+                            SMSPlugin.this.onSMSArrive(json);
                         }
                     }
                 }
@@ -442,6 +492,27 @@ extends CordovaPlugin {
             callbackContext.error(e.toString());
         }
         return null;
+    }
+
+    private JSONObject getJsonFromMap(Map<String, String> sms) {
+        JSONObject json = new JSONObject();
+        
+        try{
+            json.put( ADDRESS, sms.get(ADDRESS) );
+            json.put( BODY, sms.get(BODY) ); // May need sms.getMessageBody.toString()
+            json.put( DATE_SENT, sms.get(DATE_SENT) );
+            json.put( DATE, System.currentTimeMillis());
+            json.put( READ, MESSAGE_IS_NOT_READ );
+            json.put( SEEN, MESSAGE_IS_NOT_SEEN );
+            json.put( STATUS, sms.get(STATUS) );
+            json.put( TYPE, MESSAGE_TYPE_INBOX );
+            json.put( SERVICE_CENTER, sms.get(SERVICE_CENTER));
+            
+        } catch ( Exception e ) {
+            e.printStackTrace(); 
+        }
+
+        return json;
     }
 
     private JSONObject getJsonFromSmsMessage(SmsMessage sms) {
